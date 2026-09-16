@@ -1,5 +1,5 @@
 -- =====================================================
--- SEQUZZEX EBET // DIRECT RUN
+-- SEQUZZEX EBET // V20 (LOCKED ZONES & LIVE EGGS)
 -- =====================================================
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -59,10 +59,10 @@ local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1, -45, 1, 0)
 Title.Position = UDim2.new(0, 12, 0, 0)
 Title.BackgroundTransparency = 1
-Title.Text = "⚡ SEQUZZEX EBET // EGG SNIPER"
+Title.Text = "⚡ SEQUZZEX EBET // LOCKED ZONES"
 Title.TextColor3 = Color3.fromRGB(0, 220, 255)
 Title.Font = Enum.Font.GothamBold
-Title.TextSize = 11
+Title.TextSize = 10
 Title.TextXAlignment = Enum.TextXAlignment.Left
 Title.Parent = TopBar
 
@@ -170,7 +170,7 @@ local TierLabel = Instance.new("TextLabel")
 TierLabel.Size = UDim2.new(1, -70, 1, 0)
 TierLabel.Position = UDim2.new(0, 35, 0, 0)
 TierLabel.BackgroundTransparency = 1
-TierLabel.Text = "Сканирование секторов..."
+TierLabel.Text = "Загрузка зон..."
 TierLabel.TextColor3 = Color3.fromRGB(240, 240, 250)
 TierLabel.Font = Enum.Font.GothamMedium
 TierLabel.TextSize = 10
@@ -186,7 +186,8 @@ RightTierBtn.Font = Enum.Font.GothamBold
 RightTierBtn.TextSize = 12
 RightTierBtn.Parent = TierFrame
 
-local function scanLocations()
+-- Функция полного сбора базовых высот (создаем стабильные зоны один раз или по кнопке)
+local function buildBaseZones()
     local eggs = {}
     for _, obj in ipairs(Workspace:GetDescendants()) do
         if obj:IsA("Model") and (obj.Name:lower():find("egg") or obj.Name:lower():find("яйц")) then
@@ -197,30 +198,34 @@ local function scanLocations()
         end
     end
 
-    serverLocations = {}
     if #eggs > 0 then
         table.sort(eggs, function(a, b) return a.Position.Y < b.Position.Y end)
         
+        local newLocs = {}
         local group = {eggs[1]}
         for i = 2, #eggs do
             if math.abs(eggs[i].Position.Y - eggs[i-1].Position.Y) < 35 then
                 table.insert(group, eggs[i])
             else
-                table.insert(serverLocations, {Name = "🎯 Сектор (Высота " .. math.floor(group[1].Position.Y) .. ")", Eggs = group})
+                table.insert(newLocs, {Name = "🎯 Сектор (Высота " .. math.floor(group[1].Position.Y) .. ")", MinY = group[1].Position.Y - 15, MaxY = group[1].Position.Y + 15})
                 group = {eggs[i]}
             end
         end
-        table.insert(serverLocations, {Name = "🎯 Сектор (Высота " .. math.floor(group[1].Position.Y) .. ")", Eggs = group})
-    else
-        serverLocations = {{Name = "⚠️ Яйца не найдены", Eggs = {}}}
+        table.insert(newLocs, {Name = "🎯 Сектор (Высота " .. math.floor(group[1].Position.Y) .. ")", MinY = group[1].Position.Y - 15, MaxY = group[1].Position.Y + 15})
+        
+        serverLocations = newLocs
+        if currentLocIndex > #serverLocations then currentLocIndex = 1 end
+        TierLabel.Text = serverLocations[currentLocIndex].Name
+    elseif #serverLocations == 0 then
+        TierLabel.Text = "⚠️ Зоны не найдены (Ждем спавна)"
     end
-    currentLocIndex = 1
-    TierLabel.Text = serverLocations[currentLocIndex].Name
 end
 
-scanLocations()
+buildBaseZones()
 
+-- Переключение стрелочками никогда не ломает список, зоны зафиксированы
 LeftTierBtn.MouseButton1Click:Connect(function()
+    if #serverLocations == 0 then buildBaseZones() end
     if #serverLocations == 0 then return end
     currentLocIndex = currentLocIndex - 1
     if currentLocIndex < 1 then currentLocIndex = #serverLocations end
@@ -228,10 +233,21 @@ LeftTierBtn.MouseButton1Click:Connect(function()
 end)
 
 RightTierBtn.MouseButton1Click:Connect(function()
+    if #serverLocations == 0 then buildBaseZones() end
     if #serverLocations == 0 then return end
     currentLocIndex = currentLocIndex + 1
     if currentLocIndex > #serverLocations then currentLocIndex = 1 end
     TierLabel.Text = serverLocations[currentLocIndex].Name
+end)
+
+-- Фоновый процесс: если зоны пустые, он пробует их подгрузить, но сами названия никогда не пропадают с экрана
+task.spawn(function()
+    while true do
+        task.wait(2)
+        if #serverLocations == 0 then
+            pcall(buildBaseZones)
+        end
+    end
 end)
 
 local function stealBestEggInSelectedZone()
@@ -240,71 +256,84 @@ local function stealBestEggInSelectedZone()
     if not root then return end
 
     local returnPos = autoBasePosition or root.CFrame
-    local loc = serverLocations[currentLocIndex]
+    local currentZone = serverLocations[currentLocIndex]
     
-    if not loc or not loc.Eggs or #loc.Eggs == 0 then
-        scanLocations()
-        loc = serverLocations[currentLocIndex]
-    end
+    -- Если зона не выбрана, ничего не делаем
+    if not currentZone then return end
 
-    if loc and loc.Eggs and #loc.Eggs > 0 then
-        local bestEggPart = nil
-        local maxScore = -1
-
-        for _, part in ipairs(loc.Eggs) do
-            if part and part.Parent then
-                local score = 0
-                local model = part.Parent
-                
-                for _, desc in ipairs(model:GetDescendants()) do
-                    if desc:IsA("TextLabel") then
-                        local txt = desc.Text:upper()
-                        local numVal = 0
-                        if txt:find("B") then
-                            numVal = (tonumber(txt:match("[%d%.]+")) or 1) * 1000000000
-                        elseif txt:find("M") then
-                            numVal = (tonumber(txt:match("[%d%.]+")) or 1) * 1000000
-                        elseif txt:find("K") then
-                            numVal = (tonumber(txt:match("[%d%.]+")) or 1) * 1000
-                        else
-                            numVal = tonumber(txt:match("[%d%.]+")) or 1
-                        end
-                        score = score + numVal
-                    end
-                end
-
-                if score == 0 then
-                    score = part.Position.Magnitude
-                end
-
-                if score > maxScore then
-                    maxScore = score
-                    bestEggPart = part
+    -- Каждую секунду ищем актуальные яйца строго в диапазоне высоты выбранной зоны
+    local zoneEggs = {}
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("Model") and (obj.Name:lower():find("egg") or obj.Name:lower():find("яйц")) then
+            local part = obj.PrimaryPart or obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChildWhichIsA("BasePart")
+            if part and part.Position.Magnitude > 5 then
+                if part.Position.Y >= currentZone.MinY and part.Position.Y <= currentZone.MaxY then
+                    table.insert(zoneEggs, part)
                 end
             end
         end
+    end
 
-        if bestEggPart then
-            root.CFrame = bestEggPart.CFrame + Vector3.new(0, 1, 0)
-            root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+    -- Если в этой зоне сейчас нет яиц (все разбиты), скрипт просто не тепает впустую
+    if #zoneEggs == 0 then
+        return
+    end
 
-            local start = tick()
-            repeat
-                task.wait(0.02)
-                pcall(function()
-                    firetouchinterest(bestEggPart, root, 0)
-                    firetouchinterest(bestEggPart, root, 1)
-                end)
-                root.CFrame = bestEggPart.CFrame + Vector3.new(0, 1, 0)
-            until (not bestEggPart or not bestEggPart.Parent) or (tick() - start > 1.3)
+    local bestEggPart = nil
+    local maxScore = -1
 
-            root.CFrame = returnPos
+    for _, part in ipairs(zoneEggs) do
+        if part and part.Parent then
+            local score = 0
+            local model = part.Parent
+            
+            for _, desc in ipairs(model:GetDescendants()) do
+                if desc:IsA("TextLabel") then
+                    local txt = desc.Text:upper()
+                    local numVal = 0
+                    if txt:find("B") then
+                        numVal = (tonumber(txt:match("[%d%.]+")) or 1) * 1000000000
+                    elseif txt:find("M") then
+                        numVal = (tonumber(txt:match("[%d%.]+")) or 1) * 1000000
+                    elseif txt:find("K") then
+                        numVal = (tonumber(txt:match("[%d%.]+")) or 1) * 1000
+                    else
+                        numVal = tonumber(txt:match("[%d%.]+")) or 1
+                    end
+                    score = score + numVal
+                end
+            end
+
+            if score == 0 then
+                score = part.Position.Magnitude
+            end
+
+            if score > maxScore then
+                maxScore = score
+                bestEggPart = part
+            end
         end
+    end
+
+    if bestEggPart then
+        root.CFrame = bestEggPart.CFrame + Vector3.new(0, 1, 0)
+        root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+
+        local start = tick()
+        repeat
+            task.wait(0.02)
+            pcall(function()
+                firetouchinterest(bestEggPart, root, 0)
+                firetouchinterest(bestEggPart, root, 1)
+            end)
+            root.CFrame = bestEggPart.CFrame + Vector3.new(0, 1, 0)
+        until (not bestEggPart or not bestEggPart.Parent) or (tick() - start > 1.3)
+
+        root.CFrame = returnPos
     end
 end
 
 createButton("🚀 УКРАСТЬ ТОП-ЯЙЦО С ВЫБРАННОЙ ЗОНЫ", Color3.fromRGB(255, 255, 255), Color3.fromRGB(0, 180, 130), 38, function()
     task.spawn(stealBestEggInSelectedZone)
 end)
-print("SEQUZZEX EBET: Скрипт успешно загружен!")
-
+print("SEQUZZEX EBET: Стабильные зоны закреплены!")
