@@ -1,5 +1,5 @@
 -- =====================================================
--- SEQUZZEX EBET // V21 (FIXED TELEPORT & LIVE ZONES)
+-- SEQUZZEX EBET // V20 (LOCKED ZONES & LIVE EGGS)
 -- =====================================================
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -59,7 +59,7 @@ local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1, -45, 1, 0)
 Title.Position = UDim2.new(0, 12, 0, 0)
 Title.BackgroundTransparency = 1
-Title.Text = "⚡ SEQUZZEX EBET // FIXED TELEPORT"
+Title.Text = "⚡ SEQUZZEX EBET // LOCKED ZONES"
 Title.TextColor3 = Color3.fromRGB(0, 220, 255)
 Title.Font = Enum.Font.GothamBold
 Title.TextSize = 10
@@ -170,7 +170,7 @@ local TierLabel = Instance.new("TextLabel")
 TierLabel.Size = UDim2.new(1, -70, 1, 0)
 TierLabel.Position = UDim2.new(0, 35, 0, 0)
 TierLabel.BackgroundTransparency = 1
-TierLabel.Text = "Сканирование зон..."
+TierLabel.Text = "Загрузка зон..."
 TierLabel.TextColor3 = Color3.fromRGB(240, 240, 250)
 TierLabel.Font = Enum.Font.GothamMedium
 TierLabel.TextSize = 10
@@ -186,8 +186,8 @@ RightTierBtn.Font = Enum.Font.GothamBold
 RightTierBtn.TextSize = 12
 RightTierBtn.Parent = TierFrame
 
--- Функция полного обновления списка секторов без сброса интерфейса
-local function updateLocations()
+-- Функция полного сбора базовых высот (создаем стабильные зоны один раз или по кнопке)
+local function buildBaseZones()
     local eggs = {}
     for _, obj in ipairs(Workspace:GetDescendants()) do
         if obj:IsA("Model") and (obj.Name:lower():find("egg") or obj.Name:lower():find("яйц")) then
@@ -207,54 +207,25 @@ local function updateLocations()
             if math.abs(eggs[i].Position.Y - eggs[i-1].Position.Y) < 35 then
                 table.insert(group, eggs[i])
             else
-                table.insert(newLocs, {Name = "🎯 Сектор (Высота " .. math.floor(group[1].Position.Y) .. ")", Eggs = group})
+                table.insert(newLocs, {Name = "🎯 Сектор (Высота " .. math.floor(group[1].Position.Y) .. ")", MinY = group[1].Position.Y - 15, MaxY = group[1].Position.Y + 15})
                 group = {eggs[i]}
             end
         end
-        table.insert(newLocs, {Name = "🎯 Сектор (Высота " .. math.floor(group[1].Position.Y) .. ")", Eggs = group})
+        table.insert(newLocs, {Name = "🎯 Сектор (Высота " .. math.floor(group[1].Position.Y) .. ")", MinY = group[1].Position.Y - 15, MaxY = group[1].Position.Y + 15})
         
-        -- Сохраняем выбор игрока, если такой сектор еще существует
-        local currentName = serverLocations[currentLocIndex] and serverLocations[currentLocIndex].Name
         serverLocations = newLocs
-        
-        if currentName then
-            local found = false
-            for idx, loc in ipairs(serverLocations) do
-                if loc.Name == currentName then
-                    currentLocIndex = idx
-                    found = true
-                    break
-                end
-            end
-            if not found then
-                if currentLocIndex > #serverLocations then currentLocIndex = #serverLocations end
-                if currentLocIndex < 1 then currentLocIndex = 1 end
-            end
-        else
-            currentLocIndex = 1
-        end
-        
-        if serverLocations[currentLocIndex] then
-            TierLabel.Text = serverLocations[currentLocIndex].Name
-        end
+        if currentLocIndex > #serverLocations then currentLocIndex = 1 end
+        TierLabel.Text = serverLocations[currentLocIndex].Name
     elseif #serverLocations == 0 then
-        TierLabel.Text = "⚠️ Яйца не найдены (Ждем спавна)"
+        TierLabel.Text = "⚠️ Зоны не найдены (Ждем спавна)"
     end
 end
 
--- Первый скан
-updateLocations()
+buildBaseZones()
 
--- Фоновый процесс: каждую секунду обновляет список яиц внутри секторов
-task.spawn(function()
-    while true do
-        task.wait(1)
-        pcall(updateLocations)
-    end
-end)
-
+-- Переключение стрелочками никогда не ломает список, зоны зафиксированы
 LeftTierBtn.MouseButton1Click:Connect(function()
-    updateLocations()
+    if #serverLocations == 0 then buildBaseZones() end
     if #serverLocations == 0 then return end
     currentLocIndex = currentLocIndex - 1
     if currentLocIndex < 1 then currentLocIndex = #serverLocations end
@@ -262,11 +233,21 @@ LeftTierBtn.MouseButton1Click:Connect(function()
 end)
 
 RightTierBtn.MouseButton1Click:Connect(function()
-    updateLocations()
+    if #serverLocations == 0 then buildBaseZones() end
     if #serverLocations == 0 then return end
     currentLocIndex = currentLocIndex + 1
     if currentLocIndex > #serverLocations then currentLocIndex = 1 end
     TierLabel.Text = serverLocations[currentLocIndex].Name
+end)
+
+-- Фоновый процесс: если зоны пустые, он пробует их подгрузить, но сами названия никогда не пропадают с экрана
+task.spawn(function()
+    while true do
+        task.wait(2)
+        if #serverLocations == 0 then
+            pcall(buildBaseZones)
+        end
+    end
 end)
 
 local function stealBestEggInSelectedZone()
@@ -275,19 +256,33 @@ local function stealBestEggInSelectedZone()
     if not root then return end
 
     local returnPos = autoBasePosition or root.CFrame
+    local currentZone = serverLocations[currentLocIndex]
     
-    -- Обновляем данные прямо перед телепортом, чтобы взять свежие яйца из выбранной зоны
-    updateLocations()
-    local loc = serverLocations[currentLocIndex]
-    
-    if not loc or not loc.Eggs or #loc.Eggs == 0 then
+    -- Если зона не выбрана, ничего не делаем
+    if not currentZone then return end
+
+    -- Каждую секунду ищем актуальные яйца строго в диапазоне высоты выбранной зоны
+    local zoneEggs = {}
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("Model") and (obj.Name:lower():find("egg") or obj.Name:lower():find("яйц")) then
+            local part = obj.PrimaryPart or obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChildWhichIsA("BasePart")
+            if part and part.Position.Magnitude > 5 then
+                if part.Position.Y >= currentZone.MinY and part.Position.Y <= currentZone.MaxY then
+                    table.insert(zoneEggs, part)
+                end
+            end
+        end
+    end
+
+    -- Если в этой зоне сейчас нет яиц (все разбиты), скрипт просто не тепает впустую
+    if #zoneEggs == 0 then
         return
     end
 
     local bestEggPart = nil
     local maxScore = -1
 
-    for _, part in ipairs(loc.Eggs) do
+    for _, part in ipairs(zoneEggs) do
         if part and part.Parent then
             local score = 0
             local model = part.Parent
@@ -341,4 +336,4 @@ end
 createButton("🚀 УКРАСТЬ ТОП-ЯЙЦО С ВЫБРАННОЙ ЗОНЫ", Color3.fromRGB(255, 255, 255), Color3.fromRGB(0, 180, 130), 38, function()
     task.spawn(stealBestEggInSelectedZone)
 end)
-print("SEQUZZEX EBET: Телепорт и автообновление исправлены!")
+print("SEQUZZEX EBET: Стабильные зоны закреплены!")
